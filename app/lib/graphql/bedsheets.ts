@@ -1,36 +1,55 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 import type { BedsheetProduct } from "../data/bedsheets";
 
-export async function findLocationIdByName(admin: AdminApiContext, name: string): Promise<string | null> {
-  const res = await admin.graphql(
-    `#graphql
-      query FindLocation {
-        locations(first: 20) {
-          nodes { id name }
+function describeGraphQLError(err: any): string {
+  const gqlErrors = err?.graphQLErrors ?? err?.errors ?? err?.response?.errors;
+  if (Array.isArray(gqlErrors) && gqlErrors.length) {
+    return gqlErrors.map((e: any) => e.message ?? JSON.stringify(e)).join(" | ");
+  }
+  return err?.message ?? String(err);
+}
+
+export async function findLocationIdByName(
+  admin: AdminApiContext,
+  name: string,
+): Promise<{ id: string | null; error?: string }> {
+  try {
+    const res = await admin.graphql(
+      `#graphql
+        query FindLocation {
+          locations(first: 20) {
+            nodes { id name }
+          }
         }
-      }
-    `,
-  );
-  const json: any = await res.json();
-  const match = json.data?.locations?.nodes?.find(
-    (l: any) => l.name.toLowerCase() === name.toLowerCase(),
-  );
-  return match?.id ?? null;
+      `,
+    );
+    const json: any = await res.json();
+    const match = json.data?.locations?.nodes?.find(
+      (l: any) => l.name.toLowerCase() === name.toLowerCase(),
+    );
+    return { id: match?.id ?? null };
+  } catch (err) {
+    return { id: null, error: describeGraphQLError(err) };
+  }
 }
 
 export async function findCollectionIdByTitle(admin: AdminApiContext, title: string): Promise<string | null> {
-  const res = await admin.graphql(
-    `#graphql
-      query FindCollection($query: String!) {
-        collections(first: 5, query: $query) {
-          nodes { id title }
+  try {
+    const res = await admin.graphql(
+      `#graphql
+        query FindCollection($query: String!) {
+          collections(first: 5, query: $query) {
+            nodes { id title }
+          }
         }
-      }
-    `,
-    { variables: { query: `title:'${title.replace(/'/g, "")}'` } },
-  );
-  const json: any = await res.json();
-  return json.data?.collections?.nodes?.[0]?.id ?? null;
+      `,
+      { variables: { query: `title:'${title.replace(/'/g, "")}'` } },
+    );
+    const json: any = await res.json();
+    return json.data?.collections?.nodes?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function createBedsheetProduct(
@@ -40,6 +59,21 @@ export async function createBedsheetProduct(
   collectionId: string | null,
 ): Promise<{ productId: string; variantIdBySku: Map<string, string>; errors: string[] }> {
   const errors: string[] = [];
+  try {
+    return await createBedsheetProductInner(admin, def, locationId, collectionId, errors);
+  } catch (err) {
+    errors.push(`threw: ${describeGraphQLError(err)}`);
+    return { productId: "", variantIdBySku: new Map(), errors };
+  }
+}
+
+async function createBedsheetProductInner(
+  admin: AdminApiContext,
+  def: BedsheetProduct,
+  locationId: string,
+  collectionId: string | null,
+  errors: string[],
+): Promise<{ productId: string; variantIdBySku: Map<string, string>; errors: string[] }> {
   const description = `${def.intro} ${def.body2}`;
   const tags = ["Bedsheet", "King Size Bedsheet", "Bedsheets", "Cotton Bedsheet", "New Launch"];
 
@@ -122,6 +156,21 @@ export async function createBedsheetProduct(
 }
 
 export async function uploadAndAttachImage(
+  admin: AdminApiContext,
+  productId: string,
+  variantId: string,
+  filename: string,
+  mimeType: string,
+  fileBytes: Uint8Array,
+): Promise<string | null> {
+  try {
+    return await uploadAndAttachImageInner(admin, productId, variantId, filename, mimeType, fileBytes);
+  } catch (err) {
+    return `threw: ${describeGraphQLError(err)}`;
+  }
+}
+
+async function uploadAndAttachImageInner(
   admin: AdminApiContext,
   productId: string,
   variantId: string,

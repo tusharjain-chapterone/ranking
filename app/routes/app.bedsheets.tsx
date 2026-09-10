@@ -11,12 +11,23 @@ import {
 } from "../lib/graphql/bedsheets";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  try {
+    return await runAction(request);
+  } catch (err: any) {
+    return { ok: false, message: `Unexpected error: ${err?.message ?? String(err)}` };
+  }
+};
+
+async function runAction(request: Request) {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
 
-  const locationId = await findLocationIdByName(admin, "Vasai");
+  const { id: locationId, error: locationError } = await findLocationIdByName(admin, "Vasai");
   if (!locationId) {
-    return { ok: false, message: 'Could not find a location named "Vasai" — check Settings > Locations spelling.' };
+    return {
+      ok: false,
+      message: `Could not find a location named "Vasai"${locationError ? ` — ${locationError}` : " — check Settings > Locations spelling."}`,
+    };
   }
   const collectionId = await findCollectionIdByTitle(admin, "Bedsheets");
 
