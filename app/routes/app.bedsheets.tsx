@@ -51,21 +51,26 @@ async function runAction(request: Request) {
     productsCreated++;
     if (errors.length) log.push(`${def.title}: created with warnings — ${errors.join("; ")}`);
 
-    for (const v of def.variants) {
+    const imageTasks = def.variants.map((v) => async () => {
       const file = formData.get(v.sku) as File | null;
       const variantId = variantIdBySku.get(v.sku);
       if (!file || file.size === 0) {
         imageIssues.push(`${v.sku}: no image uploaded`);
-        continue;
+        return;
       }
       if (!variantId) {
         imageIssues.push(`${v.sku}: variant wasn't created, can't attach image`);
-        continue;
+        return;
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       const err = await uploadAndAttachImage(admin, productId, variantId, `${v.sku}.jpg`, "image/jpeg", bytes);
       if (err) imageIssues.push(`${v.sku}: ${err}`);
       else imagesAttached++;
+    });
+
+    const CONCURRENCY = 5;
+    for (let i = 0; i < imageTasks.length; i += CONCURRENCY) {
+      await Promise.all(imageTasks.slice(i, i + CONCURRENCY).map((task) => task()));
     }
   }
 

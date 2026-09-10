@@ -364,6 +364,27 @@ async function uploadAndAttachImageInner(
     return mediaErrs.map((e: any) => e.message).join(", ") || "media creation failed";
   }
 
+  // Shopify processes the uploaded image asynchronously — poll until it's READY before
+  // attaching it to a variant, otherwise attachment fails with "Non-ready media".
+  let mediaStatus = "";
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const statusRes = await admin.graphql(
+      `#graphql
+        query MediaStatus($id: ID!) {
+          node(id: $id) { ... on MediaImage { status } }
+        }
+      `,
+      { variables: { id: mediaId } },
+    );
+    const statusJson: any = await statusRes.json();
+    mediaStatus = statusJson.data?.node?.status;
+    if (mediaStatus === "READY" || mediaStatus === "FAILED") break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (mediaStatus !== "READY") {
+    return `media never became ready (status: ${mediaStatus || "unknown"})`;
+  }
+
   const assignRes = await admin.graphql(
     `#graphql
       mutation AssignVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
