@@ -77,37 +77,48 @@ async function createBedsheetProductInner(
   const description = `${def.intro} ${def.body2}`;
   const tags = ["Bedsheet", "King Size Bedsheet", "Bedsheets", "Cotton Bedsheet", "New Launch"];
 
-  const createRes = await admin.graphql(
-    `#graphql
-      mutation CreateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product { id }
-          userErrors { field message }
+  const baseProductInput: any = {
+    title: def.title,
+    descriptionHtml: `<p>${description}</p>`,
+    vendor: "HOKIPO",
+    productType: "Bedsheet",
+    tags,
+    status: "ACTIVE",
+    handle: def.handle,
+    seo: { title: def.title, description: description.slice(0, 155) },
+    ...(collectionId ? { collectionsToJoin: [collectionId] } : {}),
+  };
+
+  const runCreate = async (input: any) => {
+    const res = await admin.graphql(
+      `#graphql
+        mutation CreateProduct($product: ProductCreateInput!) {
+          productCreate(product: $product) {
+            product { id }
+            userErrors { field message }
+          }
         }
-      }
-    `,
-    {
-      variables: {
-        product: {
-          title: def.title,
-          descriptionHtml: `<p>${description}</p>`,
-          vendor: "HOKIPO",
-          productType: "Bedsheet",
-          tags,
-          status: "ACTIVE",
-          handle: def.handle,
-          seo: { title: def.title, description: description.slice(0, 155) },
-          ...(collectionId ? { collectionsToJoin: [collectionId] } : {}),
-        },
-      },
-    },
-  );
-  const createJson: any = await createRes.json();
-  const createErrs = createJson.data?.productCreate?.userErrors ?? [];
-  const productId = createJson.data?.productCreate?.product?.id;
+      `,
+      { variables: { product: input } },
+    );
+    const json: any = await res.json();
+    return {
+      productId: json.data?.productCreate?.product?.id as string | undefined,
+      userErrors: (json.data?.productCreate?.userErrors ?? []) as { field: string[]; message: string }[],
+    };
+  };
+
+  let { productId, userErrors: createErrs } = await runCreate(baseProductInput);
+
+  // Self-heal a stale handle from a prior partial run: let Shopify auto-generate one instead.
+  if (!productId && createErrs.some((e) => e.message.toLowerCase().includes("handle"))) {
+    errors.push(`create: handle collision on "${def.handle}", retrying with auto-generated handle`);
+    const { handle: _drop, ...withoutHandle } = baseProductInput;
+    ({ productId, userErrors: createErrs } = await runCreate(withoutHandle));
+  }
+
   if (createErrs.length) {
-    // Retry without the metafield if it was the problem (common: metaobject reference format mismatch)
-    errors.push(...createErrs.map((e: any) => `create: ${e.message}`));
+    errors.push(...createErrs.map((e) => `create: ${e.message}`));
   }
   if (!productId) {
     return { productId: "", variantIdBySku: new Map(), errors };
@@ -125,7 +136,7 @@ async function createBedsheetProductInner(
       measurement: { weight: { value: def.weightG, unit: "GRAMS" } },
     },
     inventoryPolicy: "DENY",
-    inventoryQuantities: [{ locationId, name: "available", quantity: 0 }],
+    inventoryQuantities: [{ locationId, availableQuantity: 0 }],
   }));
 
   const variantsRes = await admin.graphql(
