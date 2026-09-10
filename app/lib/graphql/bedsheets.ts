@@ -183,6 +183,7 @@ async function createBedsheetProductInner(
         id: variantId,
         price: def.price.toFixed(2),
         compareAtPrice: def.price.toFixed(2),
+        taxable: false,
         barcode: v.sku,
         inventoryItem: {
           sku: v.sku,
