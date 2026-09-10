@@ -164,39 +164,38 @@ async function createBedsheetProductInner(
     return { productId: "", variantIdBySku: new Map(), errors };
   }
 
-  // Match each auto-created variant (by its Color option value) to our variant data, then fill in
-  // SKU/price/weight/cost via bulk update (the variants themselves already exist from productOptions above).
+  // productCreate only ever makes ONE default variant even though we declared all Color values
+  // up front — so: update that one variant with real data, then bulk-CREATE the rest referencing
+  // the Color option values that already exist on the product.
   const autoVariantIdByColor = new Map<string, string>();
   for (const av of autoVariants) {
     const colorValue = av.selectedOptions.find((o) => o.name === "Color")?.value;
     if (colorValue) autoVariantIdByColor.set(colorValue, av.id);
   }
 
-  const updateInput = def.variants
-    .map((v) => {
-      const variantId = autoVariantIdByColor.get(v.color);
-      if (!variantId) {
-        errors.push(`variants: no auto-created variant found for color "${v.color}"`);
-        return null;
-      }
-      return {
-        id: variantId,
-        price: def.price.toFixed(2),
-        compareAtPrice: def.price.toFixed(2),
-        taxable: false,
-        barcode: v.sku,
-        inventoryItem: {
-          sku: v.sku,
-          tracked: true,
-          cost: def.vendorCost.toFixed(2),
-          measurement: { weight: { value: def.weightG, unit: "GRAMS" } },
-        },
-        inventoryPolicy: "DENY",
-      };
-    })
-    .filter((x): x is NonNullable<typeof x> => x !== null);
+  const alreadyExists = def.variants.filter((v) => autoVariantIdByColor.has(v.color));
+  const needsCreating = def.variants.filter((v) => !autoVariantIdByColor.has(v.color));
+
+  const variantFields = (v: (typeof def.variants)[number]) => ({
+    price: def.price.toFixed(2),
+    compareAtPrice: def.price.toFixed(2),
+    taxable: false,
+    barcode: v.sku,
+    inventoryItem: {
+      sku: v.sku,
+      tracked: true,
+      cost: def.vendorCost.toFixed(2),
+      measurement: { weight: { value: def.weightG, unit: "GRAMS" } },
+    },
+    inventoryPolicy: "DENY",
+  });
 
   const variantIdBySku = new Map<string, string>();
+
+  const updateInput = alreadyExists.map((v) => ({
+    id: autoVariantIdByColor.get(v.color)!,
+    ...variantFields(v),
+  }));
   if (updateInput.length) {
     const updateRes = await admin.graphql(
       `#graphql
@@ -211,9 +210,35 @@ async function createBedsheetProductInner(
     );
     const updateJson: any = await updateRes.json();
     const updateErrs = updateJson.data?.productVariantsBulkUpdate?.userErrors ?? [];
-    if (updateErrs.length) errors.push(...updateErrs.map((e: any) => `variants: ${e.message}`));
+    if (updateErrs.length) errors.push(...updateErrs.map((e: any) => `variants update: ${e.message}`));
 
     for (const pv of updateJson.data?.productVariantsBulkUpdate?.productVariants ?? []) {
+      if (pv.sku) variantIdBySku.set(pv.sku, pv.id);
+    }
+  }
+
+  const createInput = needsCreating.map((v) => ({
+    optionValues: [{ optionName: "Color", name: v.color }],
+    ...variantFields(v),
+  }));
+  if (createInput.length) {
+    const createVariantsRes = await admin.graphql(
+      `#graphql
+        mutation CreateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: DEFAULT) {
+            productVariants { id sku }
+            userErrors { field message }
+          }
+        }
+      `,
+      { variables: { productId, variants: createInput } },
+    );
+    const createVariantsJson: any = await createVariantsRes.json();
+    const createVariantsErrs = createVariantsJson.data?.productVariantsBulkCreate?.userErrors ?? [];
+    if (createVariantsErrs.length) {
+      errors.push(...createVariantsErrs.map((e: any) => `variants create: ${e.message}`));
+    }
+    for (const pv of createVariantsJson.data?.productVariantsBulkCreate?.productVariants ?? []) {
       if (pv.sku) variantIdBySku.set(pv.sku, pv.id);
     }
   }
