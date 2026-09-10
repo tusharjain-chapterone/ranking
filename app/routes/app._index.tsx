@@ -52,6 +52,14 @@ export default function Index() {
         </s-paragraph>
         <s-link href="/app/ranking">Open Ranking →</s-link>
       </s-section>
+
+      <s-section heading="Diversify Collection Order">
+        <s-paragraph>
+          Fixes "View all" pages dominated by 1-2 designs' color variants — spreads
+          different designs across page 1 using the Swatch King group export.
+        </s-paragraph>
+        <s-link href="/app/diversify">Open Diversify →</s-link>
+      </s-section>
     </s-page>
   );
 }
