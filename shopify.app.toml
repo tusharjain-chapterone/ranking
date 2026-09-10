@@ -1,0 +1,37 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "72ad9f4f627c07a130bde508ff60c7ab"
+name = "hokipo1-ops-app"
+application_url = "https://example.com"
+embedded = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,write_products,read_inventory,write_inventory,read_discounts,write_discounts,read_orders"
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  # Phase 3 (automation) will add products/update + inventory_levels/update subscriptions
+  # here once their handler routes exist — not declaring them yet to avoid undelivered webhooks.
+
+  # Mandatory GDPR compliance webhooks (required for every app, incl. custom-distributed) —
+  # current API version wants these under a dedicated table, not generic subscriptions.
+  [webhooks.privacy_compliance]
+  customer_deletion_url = "https://example.com/webhooks/customers/redact"
+  customer_data_request_url = "https://example.com/webhooks/customers/data_request"
+  shop_deletion_url = "https://example.com/webhooks/shop/redact"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+automatically_update_urls_on_dev = true
