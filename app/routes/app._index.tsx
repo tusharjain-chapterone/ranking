@@ -29,6 +29,13 @@ export default function Index() {
         <s-link href="/app/discounts">Open Discounts →</s-link>
       </s-section>
 
+      <s-section heading="Create Bedsheet Products">
+        <s-paragraph>
+          Create the 4 bedsheet products (23 variants) with images.
+        </s-paragraph>
+        <s-link href="/app/bedsheets">Open Bedsheets →</s-link>
+      </s-section>
+
       <s-section heading="Collection Ranking">
         <s-paragraph>
           Paste a ranking sheet to reorder products within an existing collection.
