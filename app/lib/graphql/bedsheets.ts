@@ -82,6 +82,129 @@ export async function deleteExistingProductsByTitle(admin: AdminApiContext, titl
   }
 }
 
+export interface BedsheetItemInput {
+  sku: string;
+  mpn: string;
+  title: string;
+  description: string;
+  tags: string;
+  price: number;
+  weightG: number;
+  vendorCost: number;
+}
+
+export async function createBedsheetItem(
+  admin: AdminApiContext,
+  item: BedsheetItemInput,
+  locationId: string,
+  collectionId: string | null,
+): Promise<{ productId: string; variantId: string; errors: string[] }> {
+  const errors: string[] = [];
+  try {
+    const createRes = await admin.graphql(
+      `#graphql
+        mutation CreateProduct($product: ProductCreateInput!) {
+          productCreate(product: $product) {
+            product {
+              id
+              variants(first: 1) { nodes { id } }
+            }
+            userErrors { field message }
+          }
+        }
+      `,
+      {
+        variables: {
+          product: {
+            title: item.title,
+            descriptionHtml: `<p>${item.description}</p>`,
+            vendor: "HOKIPO",
+            productType: "Bedsheet",
+            tags: item.tags.split(",").map((t) => t.trim()),
+            status: "ACTIVE",
+            seo: { title: item.title, description: item.description.slice(0, 155) },
+            ...(collectionId ? { collectionsToJoin: [collectionId] } : {}),
+          },
+        },
+      },
+    );
+    const createJson: any = await createRes.json();
+    const createErrs = createJson.data?.productCreate?.userErrors ?? [];
+    const productId = createJson.data?.productCreate?.product?.id;
+    const variantId = createJson.data?.productCreate?.product?.variants?.nodes?.[0]?.id;
+    if (createErrs.length) errors.push(...createErrs.map((e: any) => `create: ${e.message}`));
+    if (!productId || !variantId) {
+      return { productId: "", variantId: "", errors };
+    }
+
+    const updateRes = await admin.graphql(
+      `#graphql
+        mutation UpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            userErrors { field message }
+          }
+        }
+      `,
+      {
+        variables: {
+          productId,
+          variants: [
+            {
+              id: variantId,
+              price: item.price.toFixed(2),
+              compareAtPrice: item.price.toFixed(2),
+              taxable: false,
+              barcode: item.sku,
+              inventoryItem: {
+                sku: item.sku,
+                tracked: true,
+                cost: item.vendorCost.toFixed(2),
+                measurement: { weight: { value: item.weightG, unit: "GRAMS" } },
+              },
+              inventoryPolicy: "DENY",
+            },
+          ],
+        },
+      },
+    );
+    const updateJson: any = await updateRes.json();
+    const updateErrs = updateJson.data?.productVariantsBulkUpdate?.userErrors ?? [];
+    if (updateErrs.length) errors.push(...updateErrs.map((e: any) => `variant update: ${e.message}`));
+
+    try {
+      const invRes = await admin.graphql(
+        `#graphql
+          query VariantInventoryItem($id: ID!) {
+            productVariant(id: $id) { inventoryItem { id } }
+          }
+        `,
+        { variables: { id: variantId } },
+      );
+      const invJson: any = await invRes.json();
+      const inventoryItemId = invJson.data?.productVariant?.inventoryItem?.id;
+      if (inventoryItemId) {
+        await admin.graphql(
+          `#graphql
+            mutation ActivateInventory($inventoryItemId: ID!, $locationId: ID!) {
+              inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: 0) {
+                userErrors { field message }
+              }
+            }
+          `,
+          { variables: { inventoryItemId, locationId } },
+        );
+      }
+    } catch {
+      // non-fatal
+    }
+
+    return { productId, variantId, errors };
+  } catch (err) {
+    errors.push(`threw: ${describeGraphQLError(err)}`);
+    return { productId: "", variantId: "", errors };
+  }
+}
+
 export async function createBedsheetProduct(
   admin: AdminApiContext,
   def: BedsheetProduct,
