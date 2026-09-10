@@ -8,6 +8,7 @@ import {
   findLocationIdByName,
   findCollectionIdByTitle,
   uploadAndAttachImage,
+  deleteExistingProductsByTitle,
 } from "../lib/graphql/bedsheets";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -34,7 +35,12 @@ async function runAction(request: Request) {
   const log: string[] = [];
   let productsCreated = 0;
   let imagesAttached = 0;
+  let duplicatesRemoved = 0;
   const imageIssues: string[] = [];
+
+  for (const def of BEDSHEET_PRODUCTS) {
+    duplicatesRemoved += await deleteExistingProductsByTitle(admin, def.title);
+  }
 
   for (const def of BEDSHEET_PRODUCTS) {
     const { productId, variantIdBySku, errors } = await createBedsheetProduct(admin, def, locationId, collectionId);
@@ -66,7 +72,7 @@ async function runAction(request: Request) {
   const totalVariants = BEDSHEET_PRODUCTS.reduce((n, p) => n + p.variants.length, 0);
   return {
     ok: productsCreated > 0,
-    message: `Created ${productsCreated} of ${BEDSHEET_PRODUCTS.length} products. Attached ${imagesAttached} of ${totalVariants} images.${
+    message: `Removed ${duplicatesRemoved} duplicate/broken product(s) from earlier attempts. Created ${productsCreated} of ${BEDSHEET_PRODUCTS.length} products. Attached ${imagesAttached} of ${totalVariants} images.${
       collectionId ? "" : ' Note: no "Bedsheets" collection found — products created but not added to any collection.'
     }${log.length ? " Warnings: " + log.join(" | ") : ""}${
       imageIssues.length ? " Image issues: " + imageIssues.slice(0, 10).join(" | ") : ""

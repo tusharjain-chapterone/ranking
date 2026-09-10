@@ -52,6 +52,36 @@ export async function findCollectionIdByTitle(admin: AdminApiContext, title: str
   }
 }
 
+export async function deleteExistingProductsByTitle(admin: AdminApiContext, title: string): Promise<number> {
+  try {
+    const res = await admin.graphql(
+      `#graphql
+        query FindProducts($query: String!) {
+          products(first: 20, query: $query) {
+            nodes { id }
+          }
+        }
+      `,
+      { variables: { query: `title:'${title.replace(/'/g, "")}'` } },
+    );
+    const json: any = await res.json();
+    const ids: string[] = (json.data?.products?.nodes ?? []).map((n: any) => n.id);
+    for (const id of ids) {
+      await admin.graphql(
+        `#graphql
+          mutation DeleteProduct($input: ProductDeleteInput!) {
+            productDelete(input: $input) { deletedProductId }
+          }
+        `,
+        { variables: { input: { id } } },
+      );
+    }
+    return ids.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function createBedsheetProduct(
   admin: AdminApiContext,
   def: BedsheetProduct,
@@ -86,6 +116,7 @@ async function createBedsheetProductInner(
     status: "ACTIVE",
     handle: def.handle,
     seo: { title: def.title, description: description.slice(0, 155) },
+    productOptions: [{ name: "Color", values: def.variants.map((v) => ({ name: v.color })) }],
     ...(collectionId ? { collectionsToJoin: [collectionId] } : {}),
   };
 
@@ -94,7 +125,12 @@ async function createBedsheetProductInner(
       `#graphql
         mutation CreateProduct($product: ProductCreateInput!) {
           productCreate(product: $product) {
-            product { id }
+            product {
+              id
+              variants(first: 20) {
+                nodes { id selectedOptions { name value } }
+              }
+            }
             userErrors { field message }
           }
         }
@@ -104,17 +140,21 @@ async function createBedsheetProductInner(
     const json: any = await res.json();
     return {
       productId: json.data?.productCreate?.product?.id as string | undefined,
+      autoVariants: (json.data?.productCreate?.product?.variants?.nodes ?? []) as {
+        id: string;
+        selectedOptions: { name: string; value: string }[];
+      }[],
       userErrors: (json.data?.productCreate?.userErrors ?? []) as { field: string[]; message: string }[],
     };
   };
 
-  let { productId, userErrors: createErrs } = await runCreate(baseProductInput);
+  let { productId, autoVariants, userErrors: createErrs } = await runCreate(baseProductInput);
 
   // Self-heal a stale handle from a prior partial run: let Shopify auto-generate one instead.
   if (!productId && createErrs.some((e) => e.message.toLowerCase().includes("handle"))) {
     errors.push(`create: handle collision on "${def.handle}", retrying with auto-generated handle`);
     const { handle: _drop, ...withoutHandle } = baseProductInput;
-    ({ productId, userErrors: createErrs } = await runCreate(withoutHandle));
+    ({ productId, autoVariants, userErrors: createErrs } = await runCreate(withoutHandle));
   }
 
   if (createErrs.length) {
@@ -124,43 +164,90 @@ async function createBedsheetProductInner(
     return { productId: "", variantIdBySku: new Map(), errors };
   }
 
-  const variantsInput = def.variants.map((v) => ({
-    price: def.price.toFixed(2),
-    compareAtPrice: def.price.toFixed(2),
-    barcode: v.sku,
-    optionValues: [{ optionName: "Color", name: v.color }],
-    inventoryItem: {
-      sku: v.sku,
-      tracked: true,
-      cost: def.vendorCost.toFixed(2),
-      measurement: { weight: { value: def.weightG, unit: "GRAMS" } },
-    },
-    inventoryPolicy: "DENY",
-    inventoryQuantities: [{ locationId, availableQuantity: 0 }],
-  }));
+  // Match each auto-created variant (by its Color option value) to our variant data, then fill in
+  // SKU/price/weight/cost via bulk update (the variants themselves already exist from productOptions above).
+  const autoVariantIdByColor = new Map<string, string>();
+  for (const av of autoVariants) {
+    const colorValue = av.selectedOptions.find((o) => o.name === "Color")?.value;
+    if (colorValue) autoVariantIdByColor.set(colorValue, av.id);
+  }
 
-  const variantsRes = await admin.graphql(
-    `#graphql
-      mutation CreateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-        productVariantsBulkCreate(
-          productId: $productId
-          variants: $variants
-          strategy: REMOVE_STANDALONE_VARIANT
-        ) {
-          productVariants { id sku }
-          userErrors { field message }
-        }
+  const updateInput = def.variants
+    .map((v) => {
+      const variantId = autoVariantIdByColor.get(v.color);
+      if (!variantId) {
+        errors.push(`variants: no auto-created variant found for color "${v.color}"`);
+        return null;
       }
-    `,
-    { variables: { productId, variants: variantsInput } },
-  );
-  const variantsJson: any = await variantsRes.json();
-  const variantErrs = variantsJson.data?.productVariantsBulkCreate?.userErrors ?? [];
-  if (variantErrs.length) errors.push(...variantErrs.map((e: any) => `variants: ${e.message}`));
+      return {
+        id: variantId,
+        price: def.price.toFixed(2),
+        compareAtPrice: def.price.toFixed(2),
+        barcode: v.sku,
+        inventoryItem: {
+          sku: v.sku,
+          tracked: true,
+          cost: def.vendorCost.toFixed(2),
+          measurement: { weight: { value: def.weightG, unit: "GRAMS" } },
+        },
+        inventoryPolicy: "DENY",
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
 
   const variantIdBySku = new Map<string, string>();
-  for (const pv of variantsJson.data?.productVariantsBulkCreate?.productVariants ?? []) {
-    if (pv.sku) variantIdBySku.set(pv.sku, pv.id);
+  if (updateInput.length) {
+    const updateRes = await admin.graphql(
+      `#graphql
+        mutation UpdateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id sku }
+            userErrors { field message }
+          }
+        }
+      `,
+      { variables: { productId, variants: updateInput } },
+    );
+    const updateJson: any = await updateRes.json();
+    const updateErrs = updateJson.data?.productVariantsBulkUpdate?.userErrors ?? [];
+    if (updateErrs.length) errors.push(...updateErrs.map((e: any) => `variants: ${e.message}`));
+
+    for (const pv of updateJson.data?.productVariantsBulkUpdate?.productVariants ?? []) {
+      if (pv.sku) variantIdBySku.set(pv.sku, pv.id);
+    }
+  }
+
+  // Best-effort: activate the inventory item at the Vasai location (0 qty) so it's tied to the
+  // right warehouse for fulfillment-order splitting. Non-fatal if it fails on any single variant.
+  for (const v of def.variants) {
+    const variantId = variantIdBySku.get(v.sku);
+    if (!variantId) continue;
+    try {
+      const invRes = await admin.graphql(
+        `#graphql
+          query VariantInventoryItem($id: ID!) {
+            productVariant(id: $id) { inventoryItem { id } }
+          }
+        `,
+        { variables: { id: variantId } },
+      );
+      const invJson: any = await invRes.json();
+      const inventoryItemId = invJson.data?.productVariant?.inventoryItem?.id;
+      if (inventoryItemId) {
+        await admin.graphql(
+          `#graphql
+            mutation ActivateInventory($inventoryItemId: ID!, $locationId: ID!) {
+              inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: 0) {
+                userErrors { field message }
+              }
+            }
+          `,
+          { variables: { inventoryItemId, locationId } },
+        );
+      }
+    } catch {
+      // non-fatal — product/variant/price are already correct either way
+    }
   }
 
   return { productId, variantIdBySku, errors };
