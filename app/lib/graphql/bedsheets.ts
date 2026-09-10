@@ -389,6 +389,7 @@ async function uploadAndAttachImageInner(
     `#graphql
       mutation AssignVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
         productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+          productVariants { id image { id url } }
           userErrors { field message }
         }
       }
@@ -398,6 +399,15 @@ async function uploadAndAttachImageInner(
   const assignJson: any = await assignRes.json();
   const assignErrs = assignJson.data?.productVariantAppendMedia?.userErrors ?? [];
   if (assignErrs.length) return assignErrs.map((e: any) => e.message).join(", ");
+
+  const updatedVariant = assignJson.data?.productVariantAppendMedia?.productVariants?.find(
+    (pv: any) => pv.id === variantId,
+  );
+  if (!updatedVariant?.image?.url) {
+    return `mutation reported success but variant has no image afterward (got: ${JSON.stringify(
+      assignJson.data?.productVariantAppendMedia,
+    )})`;
+  }
 
   return null; // success
 }
