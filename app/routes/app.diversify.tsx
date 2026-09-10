@@ -3,11 +3,14 @@ import type { ActionFunctionArgs } from "react-router";
 import { useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 
-// Parses a Swatch King "Product groups" export (Group Name, Option Value,
-// Swatch Color Code / Image URL). Image URL filenames are the real Shopify
-// product handle (verified: cdn.starapps.studio/.../<handle>.media matches
-// the store's actual product Handle), so we use that to link each product
-// to its design family without needing any extra data from Swatch King.
+// Parses a Swatch King "Product groups" export. Handles both export
+// variants seen in practice: the detailed one with an explicit
+// "Product Handle" column (preferred - covers every row, even ones with
+// no swatch image set), and a leaner one with only Group Name / Option
+// Value / Swatch Color Code / Image URL, where the image URL's filename
+// is the real Shopify product handle (verified against a live product
+// export: cdn.starapps.studio/.../<handle>.media matches the store's
+// actual product Handle).
 function parseSwatchGroupCsv(text: string): Map<string, string> {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   const handleToGroup = new Map<string, string>();
@@ -33,14 +36,27 @@ function parseSwatchGroupCsv(text: string): Map<string, string> {
     return out;
   };
 
+  const header = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const groupNameIdx = header.indexOf("group name");
+  const productHandleIdx = header.indexOf("product handle");
+  const imageUrlIdx = header.findIndex((h) => h.includes("swatch color code") || h.includes("image url"));
+
+  const extractHandleFromUrl = (url: string): string => {
+    const withoutQuery = url.split("?")[0];
+    const filename = withoutQuery.split("/").pop() || "";
+    return filename.replace(/\.[a-zA-Z0-9]+$/, "");
+  };
+
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCsvLine(lines[i]);
-    const groupName = cols[0]?.trim();
-    const urlOrColor = cols[2]?.trim();
-    if (!groupName || !urlOrColor || !urlOrColor.startsWith("http")) continue;
-    const withoutQuery = urlOrColor.split("?")[0];
-    const filename = withoutQuery.split("/").pop() || "";
-    const handle = filename.replace(/\.[a-zA-Z0-9]+$/, "");
+    const groupName = cols[groupNameIdx]?.trim();
+    if (!groupName) continue;
+
+    let handle = productHandleIdx >= 0 ? cols[productHandleIdx]?.trim() : "";
+    if (!handle && imageUrlIdx >= 0) {
+      const urlOrColor = cols[imageUrlIdx]?.trim();
+      if (urlOrColor?.startsWith("http")) handle = extractHandleFromUrl(urlOrColor);
+    }
     if (handle) handleToGroup.set(handle, groupName);
   }
   return handleToGroup;
