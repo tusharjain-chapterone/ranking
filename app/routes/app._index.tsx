@@ -28,6 +28,13 @@ export default function Index() {
         <s-paragraph>Create and manage automatic and code-based discounts.</s-paragraph>
         <s-link href="/app/discounts">Open Discounts →</s-link>
       </s-section>
+
+      <s-section heading="Collection Ranking">
+        <s-paragraph>
+          Paste a ranking sheet to reorder products within an existing collection.
+        </s-paragraph>
+        <s-link href="/app/ranking">Open Ranking →</s-link>
+      </s-section>
     </s-page>
   );
 }
