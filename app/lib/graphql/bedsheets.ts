@@ -9,6 +9,44 @@ function describeGraphQLError(err: any): string {
   return err?.message ?? String(err);
 }
 
+export async function setComplementaryProducts(
+  admin: AdminApiContext,
+  productId: string,
+  complementaryProductIds: string[],
+): Promise<string | null> {
+  if (complementaryProductIds.length === 0) return null;
+  try {
+    const res = await admin.graphql(
+      `#graphql
+        mutation SetComplementary($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            userErrors { field message }
+          }
+        }
+      `,
+      {
+        variables: {
+          metafields: [
+            {
+              ownerId: productId,
+              namespace: "shopify--discovery--product_recommendation",
+              key: "complementary_products",
+              type: "list.product_reference",
+              value: JSON.stringify(complementaryProductIds),
+            },
+          ],
+        },
+      },
+    );
+    const json: any = await res.json();
+    const errs = json.data?.metafieldsSet?.userErrors ?? [];
+    if (errs.length) return errs.map((e: any) => e.message).join(", ");
+    return null;
+  } catch (err) {
+    return `threw: ${describeGraphQLError(err)}`;
+  }
+}
+
 export async function findLocationIdByName(
   admin: AdminApiContext,
   name: string,

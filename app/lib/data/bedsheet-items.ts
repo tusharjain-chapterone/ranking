@@ -8,6 +8,13 @@ export interface BedsheetItem {
   vendorCost: number;
 }
 
+// Collection family, derived from the shared IN-number suffix in each item's mpn
+// (IN1397=Allure, IN1398=Hibond, IN1399=Feather Touch, IN1400=Vintage). Used to link
+// sibling colorways together via the Complementary Products metafield.
+export function collectionGroupKey(mpn: string): string {
+  return mpn.split("-").pop() ?? mpn;
+}
+
 const ALLURE_TAGS = "Bedsheet, Bedsheets, Cotton Bedsheet, King Size Bedsheet, New Launch, 180 TC Cotton Twill";
 const HIBOND_TAGS = "Bedsheet, Bedsheets, Cotton Bedsheet, King Size Bedsheet, New Launch, 180 TC Cotton Percale";
 const FEATHER_TAGS = "Bedsheet, Bedsheets, Cotton Bedsheet, King Size Bedsheet, New Launch, 300 TC Cotton Sateen";

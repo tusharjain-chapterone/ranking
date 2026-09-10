@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ActionFunctionArgs } from "react-router";
 import { useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
-import { BEDSHEET_ITEMS } from "../lib/data/bedsheet-items";
+import { BEDSHEET_ITEMS, collectionGroupKey } from "../lib/data/bedsheet-items";
 import { BEDSHEET_PRODUCTS as OLD_GROUPED_PRODUCTS } from "../lib/data/bedsheets";
 import {
   createBedsheetItem,
@@ -10,6 +10,7 @@ import {
   findCollectionIdByTitle,
   uploadAndAttachImage,
   deleteExistingProductsByTitle,
+  setComplementaryProducts,
 } from "../lib/graphql/bedsheets";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -47,6 +48,7 @@ async function runAction(request: Request) {
   let productsCreated = 0;
   let imagesAttached = 0;
   const imageIssues: string[] = [];
+  const productIdBySku = new Map<string, string>();
 
   const createOne = async (item: (typeof BEDSHEET_ITEMS)[number]) => {
     const { productId, variantId, errors } = await createBedsheetItem(admin, item, locationId, collectionId);
@@ -55,6 +57,7 @@ async function runAction(request: Request) {
       return;
     }
     productsCreated++;
+    productIdBySku.set(item.sku, productId);
     if (errors.length) log.push(`${item.sku}: created with warnings — ${errors.join("; ")}`);
 
     const file = formData.get(item.sku) as File | null;
@@ -73,13 +76,32 @@ async function runAction(request: Request) {
     await Promise.all(BEDSHEET_ITEMS.slice(i, i + CONCURRENCY).map(createOne));
   }
 
+  // Link sibling colorways (same collection family) via the Complementary Products
+  // metafield so each individual product page can show the others.
+  let complementaryLinked = 0;
+  const complementaryIssues: string[] = [];
+  const bySkuItem = new Map(BEDSHEET_ITEMS.map((it) => [it.sku, it] as const));
+  for (const [sku, productId] of productIdBySku) {
+    const item = bySkuItem.get(sku)!;
+    const group = collectionGroupKey(item.mpn);
+    const siblingProductIds = BEDSHEET_ITEMS.filter(
+      (it) => it.sku !== sku && collectionGroupKey(it.mpn) === group,
+    )
+      .map((it) => productIdBySku.get(it.sku))
+      .filter((id): id is string => Boolean(id));
+    if (siblingProductIds.length === 0) continue;
+    const err = await setComplementaryProducts(admin, productId, siblingProductIds);
+    if (err) complementaryIssues.push(`${sku}: ${err}`);
+    else complementaryLinked++;
+  }
+
   return {
     ok: productsCreated > 0,
-    message: `Removed ${duplicatesRemoved} old/duplicate product(s). Created ${productsCreated} of ${BEDSHEET_ITEMS.length} individual products. Attached ${imagesAttached} of ${BEDSHEET_ITEMS.length} images.${
+    message: `Removed ${duplicatesRemoved} old/duplicate product(s). Created ${productsCreated} of ${BEDSHEET_ITEMS.length} individual products. Attached ${imagesAttached} of ${BEDSHEET_ITEMS.length} images. Linked color-variant siblings on ${complementaryLinked} products.${
       collectionId ? "" : ' Note: no "Bedsheets" collection found — products created but not added to any collection.'
     }${log.length ? " Warnings: " + log.join(" | ") : ""}${
       imageIssues.length ? " Image issues: " + imageIssues.slice(0, 10).join(" | ") : ""
-    }`,
+    }${complementaryIssues.length ? " Sibling-link issues: " + complementaryIssues.slice(0, 10).join(" | ") : ""}`,
   };
 };
 
