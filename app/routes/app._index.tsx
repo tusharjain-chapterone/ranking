@@ -29,9 +29,19 @@ export default function Index() {
         <s-link href="/app/discounts">Open Discounts →</s-link>
       </s-section>
 
-      <s-section heading="Create Bedsheet Products">
+      <s-section heading="Import Products (universal)">
         <s-paragraph>
-          Create the 4 bedsheet products (23 variants) with images.
+          Paste any CSV (SKU, Title, Price required, everything else optional) and
+          upload matching images to create products in bulk — not tied to bedsheets,
+          works for any future product batch.
+        </s-paragraph>
+        <s-link href="/app/import">Open Import →</s-link>
+      </s-section>
+
+      <s-section heading="Create Bedsheet Products (one-off, already done)">
+        <s-paragraph>
+          The original 23-bedsheet tool. Kept for reference — use Import above for
+          anything new.
         </s-paragraph>
         <s-link href="/app/bedsheets">Open Bedsheets →</s-link>
       </s-section>
